@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -57,6 +58,11 @@ fun RadarScreen(viewModel: RadarViewModel = viewModel()) {
                 title = {
                     TextButton(onClick = { showSitePicker = true }) {
                         Text(uiState.site.id, style = androidx.compose.material3.MaterialTheme.typography.titleLarge)
+                        Icon(
+                            Icons.Filled.ArrowDropDown,
+                            contentDescription = "Change radar site",
+                            modifier = Modifier.padding(start = 2.dp),
+                        )
                     }
                 },
                 actions = {

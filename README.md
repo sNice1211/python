@@ -26,11 +26,17 @@ public archive, plus raw surface station observations from the National Weather 
 
 ## Data sources (both free, no API key)
 
-- **Radar**: `s3://noaa-nexrad-level2` (NOAA Big Data Program, public/anonymous). A full volume
-  (all elevation sweeps) typically posts every 4-10 minutes depending on the site's VCP — this
-  is genuinely raw Level II data, but not sub-minute real-time. Streaming the individual
-  real-time LDM chunks from Unidata's separate bucket would cut that latency; it's a natural
-  follow-up and isn't implemented here.
+- **Radar**: `s3://unidata-nexrad-level2` (Unidata's public mirror of the NOAA archive,
+  anonymous/no-sign-request). NOAA's own `noaa-nexrad-level2` bucket -- long documented as *the*
+  canonical public archive, and what this app originally used -- now returns `AccessDenied` for
+  all anonymous requests, confirmed directly against S3 (not a proxy/sandbox artifact: verified
+  from two independent networks, including a real device). Unidata's mirror has the same key
+  layout and is still genuinely public, but syncs with a multi-hour lag rather than the
+  ~4-10 minutes NOAA's bucket used to offer, so this is raw data but noticeably delayed.
+  Cutting that lag means reading Unidata's separate real-time chunk feed instead
+  (`s3://unidata-nexrad-level2-chunks`, keys like `<SITE>/<volume>/<yyyyMMdd>-<HHmmss>-<seq>-S`),
+  reassembling the S/I/E sequence per volume -- confirmed reachable and public, but not
+  implemented here.
 - **Stations**: `api.weather.gov` (National Weather Service). **Before shipping**, replace the
   placeholder `USER_AGENT` in `NwsStationRepository.kt` with your own app name/contact — NWS
   asks every client to self-identify.

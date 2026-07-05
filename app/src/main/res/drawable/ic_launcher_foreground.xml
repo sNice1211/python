@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- concentric range rings -->
+    <path
+        android:pathData="M68,54 A14,14 0 1,1 40,54 A14,14 0 1,1 68,54"
+        android:strokeColor="#33E39A"
+        android:strokeWidth="1.2"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M78,54 A24,24 0 1,1 30,54 A24,24 0 1,1 78,54"
+        android:strokeColor="#2BB37A"
+        android:strokeWidth="1.2"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M88,54 A34,34 0 1,1 20,54 A34,34 0 1,1 88,54"
+        android:strokeColor="#1F8C61"
+        android:strokeWidth="1.2"
+        android:fillColor="#00000000" />
+    <!-- sweep wedge -->
+    <path
+        android:pathData="M54,54 L54,20 A34,34 0 0,1 84,38 Z"
+        android:fillColor="#4DE39A"
+        android:fillAlpha="0.55" />
+    <!-- radar center -->
+    <path
+        android:pathData="M56.5,54 A2.5,2.5 0 1,1 51.5,54 A2.5,2.5 0 1,1 56.5,54"
+        android:fillColor="#E6FFF4" />
+</vector>

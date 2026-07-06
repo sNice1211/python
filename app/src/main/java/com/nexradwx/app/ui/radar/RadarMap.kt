@@ -1,6 +1,8 @@
 package com.nexradwx.app.ui.radar
 
 import android.graphics.Bitmap
+import android.view.Gravity
+import android.widget.FrameLayout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -11,10 +13,10 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.CompositingStrategy
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import com.nexradwx.app.ui.theme.NexradWxTheme
 import com.nexradwx.core.model.MomentCode
 import com.nexradwx.core.model.RadarVolume
 import com.nexradwx.core.render.PpiRasterizer
@@ -53,9 +55,10 @@ fun RadarMap(
     rangeKm: Float,
     userLocation: Pair<Double, Double>?,
     modifier: Modifier = Modifier,
+    overlayContent: @Composable () -> Unit = {},
 ) {
     val context = LocalContext.current
-    
+
     // Osmdroid needs a User-Agent to avoid being blocked by OSM servers.
     LaunchedEffect(context) {
         Configuration.getInstance().load(context, context.getSharedPreferences("osmdroid", 0))
@@ -69,6 +72,26 @@ fun RadarMap(
             zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
             controller.setZoom(7.5)
             controller.setCenter(GeoPoint(site.latitude.toDouble(), site.longitude.toDouble()))
+        }
+    }
+
+    // overlayContent (the product-selector tabs) needs to reliably paint over mapView, which is a
+    // real embedded View whose own async tile/pan redraws are otherwise a coin flip to composite
+    // correctly against separately-hosted interop Views. Making it a *child* of the same native
+    // FrameLayout - added after the map - removes the ambiguity entirely: plain Android child
+    // order is deterministic, unlike ordering between two sibling AndroidViews managed by Compose.
+    val overlayView = remember { ComposeView(context) }
+    val container = remember {
+        FrameLayout(context).apply {
+            addView(mapView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            addView(
+                overlayView,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP,
+                ),
+            )
         }
     }
 
@@ -173,13 +196,8 @@ fun RadarMap(
     }
 
     AndroidView(
-        factory = { mapView },
-        // MapView is a real embedded View; Android always draws such interop Views after all
-        // pure-Compose content in the same Owner, regardless of layout order, so its own async
-        // redraws during panning/flinging would otherwise flash on top of the TabRow above it.
-        // Forcing it through an offscreen compositing layer makes it respect normal Compose z-order.
-        modifier = modifier
-            .fillMaxSize()
-            .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen),
+        factory = { container },
+        update = { overlayView.setContent { NexradWxTheme { overlayContent() } } },
+        modifier = modifier.fillMaxSize(),
     )
 }

@@ -3,8 +3,8 @@ package com.nexradwx.app.data.radar
 import com.nexradwx.app.network.HttpClientProvider
 import com.nexradwx.core.decode.Level2Decoder
 import com.nexradwx.core.model.RadarVolume
-import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.io.StringReader
 import java.time.ZoneOffset
 import java.time.ZonedDateTime
@@ -12,6 +12,7 @@ import java.util.zip.GZIPInputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Request
+import okhttp3.Response
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 
@@ -21,26 +22,13 @@ sealed class RadarFetchResult {
 }
 
 /**
- * Fetches Level II volumes from Unidata's public mirror of the NOAA archive on S3
- * (s3://unidata-nexrad-level2, anonymous/no-sign-request).
- *
- * NOAA's own `noaa-nexrad-level2` bucket -- long documented as the canonical public archive --
- * now returns AccessDenied for anonymous requests, including plain GetObject on known keys, not
- * just listing (confirmed directly against S3, not a local network artifact). Unidata's mirror is
- * still genuinely public and has the same key layout, but syncs with several hours of lag rather
- * than the ~4-10 minutes NOAA's bucket used to offer, so this is raw data but noticeably delayed.
- * Cutting that lag would mean reading Unidata's separate real-time chunk feed
- * (s3://unidata-nexrad-level2-chunks, key layout `<SITE>/<volume>/<yyyyMMdd>-<HHmmss>-<seq>-<S|I|E>`)
- * and reassembling the S/I/E sequence per volume -- verified reachable, not implemented here.
- *
- * Object keys look like `<yyyy>/<MM>/<dd>/<SITE>/<SITE><yyyyMMdd>_<HHmmss>_V06`, with older
- * entries additionally gzip-compressed (`..._V06.gz`).
+ * Fetches Level II volumes from Unidata's public mirror of the NOAA archive on S3.
  */
 class RadarArchiveRepository {
     companion object {
         private const val BUCKET_HOST = "unidata-nexrad-level2.s3.amazonaws.com"
         private val VOLUME_KEY_PATTERN = Regex(""".*_V0\d(\.gz)?$""")
-        private const val MAX_DAYS_BACK = 3 // covers the mirror's observed multi-hour sync lag
+        private const val MAX_DAYS_BACK = 3
     }
 
     suspend fun fetchLatestVolume(siteId: String): RadarFetchResult = withContext(Dispatchers.IO) {
@@ -60,10 +48,9 @@ class RadarArchiveRepository {
 
             val latestKey = keys.maxOrNull() ?: continue
             return@withContext try {
-                val bytes = downloadObject(latestKey)
-                RadarFetchResult.Success(Level2Decoder.decode(bytes), latestKey)
+                downloadAndDecode(latestKey)
             } catch (e: Exception) {
-                RadarFetchResult.Failure("Could not download $latestKey: ${e.message}", e)
+                RadarFetchResult.Failure("Could not download or decode $latestKey: ${e.message}", e)
             }
         }
         lastError ?: RadarFetchResult.Failure(
@@ -80,20 +67,33 @@ class RadarArchiveRepository {
         }
     }
 
-    private fun downloadObject(key: String): ByteArray {
+    private fun downloadAndDecode(key: String): RadarFetchResult {
         val url = "https://$BUCKET_HOST/$key"
         val request = Request.Builder().url(url).build()
-        HttpClientProvider.client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw IOException("HTTP ${response.code} fetching $key")
-            val raw = response.body?.bytes() ?: throw IOException("Empty body for $key")
-            return if (key.endsWith(".gz")) gunzip(raw) else raw
+        val response = HttpClientProvider.client.newCall(request).execute()
+        
+        if (!response.isSuccessful) {
+            response.close()
+            throw IOException("HTTP ${response.code} fetching $key")
         }
-    }
 
-    private fun gunzip(data: ByteArray): ByteArray {
-        val out = ByteArrayOutputStream(data.size * 3)
-        GZIPInputStream(data.inputStream()).use { it.copyTo(out) }
-        return out.toByteArray()
+        val body = response.body ?: throw IOException("Empty body for $key")
+        
+        return try {
+            val rawInputStream = body.byteStream()
+            val inputStream = if (key.endsWith(".gz")) {
+                GZIPInputStream(rawInputStream)
+            } else {
+                rawInputStream
+            }
+            
+            inputStream.use { stream ->
+                val volume = Level2Decoder.decode(stream)
+                RadarFetchResult.Success(volume, key)
+            }
+        } finally {
+            response.close()
+        }
     }
 
     private fun parseObjectKeys(xml: String): List<String> {

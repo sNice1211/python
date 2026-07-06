@@ -12,6 +12,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Radar
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -19,6 +22,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Tab
@@ -51,13 +55,14 @@ private val DISPLAYED_MOMENTS = listOf(
 fun RadarScreen(viewModel: RadarViewModel = viewModel()) {
     val uiState by viewModel.uiState.collectAsState()
     var showSitePicker by remember { mutableStateOf(false) }
+    var useMap by remember { mutableStateOf(true) }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     TextButton(onClick = { showSitePicker = true }) {
-                        Text(uiState.site.id, style = androidx.compose.material3.MaterialTheme.typography.titleLarge)
+                        Text(uiState.site.id, style = MaterialTheme.typography.titleLarge)
                         Icon(
                             Icons.Filled.ArrowDropDown,
                             contentDescription = "Change radar site",
@@ -66,6 +71,15 @@ fun RadarScreen(viewModel: RadarViewModel = viewModel()) {
                     }
                 },
                 actions = {
+                    IconButton(onClick = { viewModel.useMyLocation() }) {
+                        Icon(Icons.Filled.MyLocation, contentDescription = "My Location")
+                    }
+                    IconButton(onClick = { useMap = !useMap }) {
+                        Icon(
+                            if (useMap) Icons.Filled.Radar else Icons.Filled.Map,
+                            contentDescription = if (useMap) "Switch to PPI" else "Switch to Map"
+                        )
+                    }
                     IconButton(onClick = { viewModel.refresh() }) {
                         Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
                     }
@@ -85,13 +99,24 @@ fun RadarScreen(viewModel: RadarViewModel = viewModel()) {
                 }
             }
 
-            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                PpiView(
-                    volume = uiState.volume,
-                    moment = uiState.moment,
-                    rangeKm = uiState.rangeKm,
-                    modifier = Modifier.padding(8.dp),
-                )
+            Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                if (useMap) {
+                    RadarMap(
+                        site = uiState.site,
+                        volume = uiState.volume,
+                        moment = uiState.moment,
+                        rangeKm = uiState.rangeKm,
+                        userLocation = uiState.userLocation
+                    )
+                } else {
+                    PpiView(
+                        volume = uiState.volume,
+                        moment = uiState.moment,
+                        rangeKm = uiState.rangeKm,
+                        modifier = Modifier.padding(8.dp),
+                    )
+                }
+                
                 if (uiState.isLoading) {
                     CircularProgressIndicator()
                 }
@@ -107,16 +132,16 @@ fun RadarScreen(viewModel: RadarViewModel = viewModel()) {
             uiState.errorMessage?.let { message ->
                 Text(
                     text = message,
-                    color = androidx.compose.material3.MaterialTheme.colorScheme.error,
-                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                 )
             }
 
             uiState.objectKey?.let { key ->
                 Text(
                     text = "Source: $key",
-                    style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
                 )
             }
         }
@@ -169,7 +194,7 @@ private fun SitePickerDialog(
                                 .clickable { onSiteSelected(site) },
                             colors = if (site.id == currentSite.id) {
                                 androidx.compose.material3.ListItemDefaults.colors(
-                                    headlineColor = androidx.compose.material3.MaterialTheme.colorScheme.primary,
+                                    headlineColor = MaterialTheme.colorScheme.primary,
                                 )
                             } else {
                                 androidx.compose.material3.ListItemDefaults.colors()

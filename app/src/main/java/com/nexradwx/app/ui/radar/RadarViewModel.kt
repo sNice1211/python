@@ -1,9 +1,11 @@
 package com.nexradwx.app.ui.radar
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.nexradwx.app.data.radar.RadarArchiveRepository
 import com.nexradwx.app.data.radar.RadarFetchResult
+import com.nexradwx.app.location.LocationService
 import com.nexradwx.core.model.MomentCode
 import com.nexradwx.core.model.RadarVolume
 import com.nexradwx.core.site.RadarSite
@@ -20,12 +22,13 @@ data class RadarUiState(
     val objectKey: String? = null,
     val isLoading: Boolean = false,
     val errorMessage: String? = null,
-    // 230 km / 124 nm matches the classic WSR-88D surveillance-cut display range.
     val rangeKm: Float = 230f,
+    val userLocation: Pair<Double, Double>? = null,
 )
 
-class RadarViewModel : ViewModel() {
+class RadarViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = RadarArchiveRepository()
+    private val locationService = LocationService(application)
 
     private val _uiState = MutableStateFlow(RadarUiState())
     val uiState: StateFlow<RadarUiState> = _uiState.asStateFlow()
@@ -45,7 +48,12 @@ class RadarViewModel : ViewModel() {
 
     fun refresh() {
         val site = _uiState.value.site
-        _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
+        _uiState.value = _uiState.value.copy(
+            isLoading = true,
+            volume = null,
+            objectKey = null,
+            errorMessage = null
+        )
         viewModelScope.launch {
             when (val result = repository.fetchLatestVolume(site.id)) {
                 is RadarFetchResult.Success -> _uiState.value = _uiState.value.copy(
@@ -57,6 +65,23 @@ class RadarViewModel : ViewModel() {
                     isLoading = false,
                     errorMessage = result.message,
                 )
+            }
+        }
+    }
+
+    fun useMyLocation() {
+        viewModelScope.launch {
+            val location = locationService.getCurrentLocation()
+            if (location != null) {
+                val nearestSite = RadarSiteCatalog.nearest(location.latitude, location.longitude, 1).firstOrNull()
+                _uiState.value = _uiState.value.copy(
+                    userLocation = location.latitude to location.longitude
+                )
+                if (nearestSite != null && nearestSite.id != _uiState.value.site.id) {
+                    selectSite(nearestSite)
+                }
+            } else {
+                _uiState.value = _uiState.value.copy(errorMessage = "Could not determine location")
             }
         }
     }

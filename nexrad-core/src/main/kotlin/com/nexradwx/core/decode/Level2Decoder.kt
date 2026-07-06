@@ -7,36 +7,35 @@ import com.nexradwx.core.model.RadialStatus
 import com.nexradwx.core.model.RadarVolume
 import com.nexradwx.core.model.Sweep
 import com.nexradwx.core.model.VolumeHeader
+import java.io.BufferedInputStream
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.DataInputStream
 import java.io.IOException
+import java.io.InputStream
 import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
 
 /**
  * Decodes NOAA NEXRAD Level II Archive/real-time files (ICD 2620002 / 2620010).
- *
- * File layout:
- *  - optional 24-byte volume header ("AR2V0006." style)
- *  - a sequence of "LDM compressed records": a 4-byte big-endian signed byte count
- *    (magnitude only matters) followed by that many bytes of bzip2-compressed data.
- *    Concatenating the decompressed payloads yields the message stream.
- *  - the message stream is a sequence of [12-byte legacy CTM header][16-byte message
- *    header][message body]. We only decode Message Type 31 (Digital Radar Data Generic
- *    Format), which is what carries REF/VEL/SW/ZDR/PHI/RHO moments.
  */
 object Level2Decoder {
 
     private const val CTM_HEADER_SIZE = 12
     private const val MESSAGE_HEADER_SIZE = 16
-    private const val LEGACY_MESSAGE_SIZE = 2432 // CTM(12) + header+data(2416) + FCS(4)
+    private const val LEGACY_MESSAGE_SIZE = 2432
     private const val DAY_MILLIS = 86_400_000L
     private const val MSG_TYPE_DIGITAL_RADAR_DATA = 31
 
-    fun decode(raw: ByteArray): RadarVolume {
-        val fileReader = RadarByteReader(raw)
-        val header = tryReadVolumeHeader(fileReader)
-        val messageStreamStart = fileReader.position
-        val messageBytes = decompressLdmRecords(raw, messageStreamStart)
+    /** Moments required by the app's UI. Others are skipped to save memory. */
+    private val REQUIRED_MOMENTS = setOf("REF", "VEL", "RHO")
+
+    fun decode(inputStream: InputStream): RadarVolume {
+        val bufferedIn = if (inputStream is BufferedInputStream) inputStream else BufferedInputStream(inputStream)
+        val dataIn = DataInputStream(bufferedIn)
+        val header = tryReadVolumeHeader(bufferedIn)
+        
+        // Decompress the LDM-framed bzip2 records into a single message stream.
+        val messageBytes = decompressLdmRecords(dataIn)
 
         val sweeps = LinkedHashMap<Int, MutableList<Radial>>()
         val reader = RadarByteReader(messageBytes)
@@ -46,9 +45,9 @@ object Level2Decoder {
             reader.skip(CTM_HEADER_SIZE)
 
             val sizeHw = reader.readU16()
-            reader.readU8() // RDA redundant-channel bitfield, unused
+            reader.readU8() // RDA redundant-channel bitfield
             val msgType = reader.readU8()
-            reader.readU16() // sequence number, unused
+            reader.readU16() // sequence number
             val julianDate = reader.readU16()
             val msOfDay = reader.readU32()
             val numSegments = reader.readU16()
@@ -66,7 +65,7 @@ object Level2Decoder {
                     try {
                         decodeMessage31(reader, julianDate, msOfDay, sweeps)
                     } catch (e: Exception) {
-                        // A malformed/truncated radial shouldn't take down the whole volume.
+                        // Skip malformed radials
                     }
                 }
             }
@@ -88,12 +87,30 @@ object Level2Decoder {
         return RadarVolume(header = header, sweeps = sweepList)
     }
 
-    private fun tryReadVolumeHeader(reader: RadarByteReader): VolumeHeader? {
-        if (reader.remaining() < 24) return null
-        val startPos = reader.position
+    private fun tryReadVolumeHeader(bufferedIn: BufferedInputStream): VolumeHeader? {
+        val buffer = ByteArray(24)
+        bufferedIn.mark(24)
+        val read = try {
+            var total = 0
+            while (total < 24) {
+                val n = bufferedIn.read(buffer, total, 24 - total)
+                if (n == -1) break
+                total += n
+            }
+            total
+        } catch (e: IOException) {
+            0
+        }
+        
+        if (read < 24) {
+            bufferedIn.reset()
+            return null
+        }
+
+        val reader = RadarByteReader(buffer)
         val version = reader.readAscii(9)
         if (!version.startsWith("AR2V") && !version.startsWith("ARCHIVE2")) {
-            reader.position = startPos
+            bufferedIn.reset()
             return null
         }
         val extensionNumber = reader.readAscii(3)
@@ -108,35 +125,27 @@ object Level2Decoder {
         )
     }
 
-    /** Concatenates the decompressed payloads of every LDM-framed bzip2 block. */
-    private fun decompressLdmRecords(data: ByteArray, start: Int): ByteArray {
-        val out = ByteArrayOutputStream(data.size * 3)
-        var offset = start
-        var decodedAny = false
-        while (offset + 4 <= data.size) {
-            val rawLen = readSignedBe32(data, offset)
-            val blockLen = if (rawLen < 0) -rawLen else rawLen
-            offset += 4
-            if (blockLen <= 0 || offset + blockLen > data.size) break
-            try {
-                BZip2CompressorInputStream(ByteArrayInputStream(data, offset, blockLen)).use {
+    private fun decompressLdmRecords(dataIn: DataInputStream): ByteArray {
+        val out = ByteArrayOutputStream()
+        
+        try {
+            while (true) {
+                val rawLen = try { dataIn.readInt() } catch (e: Exception) { break }
+                val blockLen = if (rawLen < 0) -rawLen else rawLen
+                if (blockLen <= 0) break
+                
+                val block = ByteArray(blockLen)
+                dataIn.readFully(block)
+                
+                BZip2CompressorInputStream(ByteArrayInputStream(block)).use {
                     it.copyTo(out)
                 }
-                decodedAny = true
-            } catch (e: IOException) {
-                if (decodedAny) break
-                return data.copyOfRange(start, data.size)
             }
-            offset += blockLen
+        } catch (e: IOException) {
+            // End of stream or malformed block
         }
-        return if (decodedAny) out.toByteArray() else data.copyOfRange(start, data.size)
+        return out.toByteArray()
     }
-
-    private fun readSignedBe32(data: ByteArray, offset: Int): Int =
-        ((data[offset].toInt() and 0xFF) shl 24) or
-            ((data[offset + 1].toInt() and 0xFF) shl 16) or
-            ((data[offset + 2].toInt() and 0xFF) shl 8) or
-            (data[offset + 3].toInt() and 0xFF)
 
     private fun decodeMessage31(
         reader: RadarByteReader,
@@ -145,24 +154,24 @@ object Level2Decoder {
         sweeps: MutableMap<Int, MutableList<Radial>>,
     ) {
         val dataHeaderStart = reader.position
-        reader.readAscii(4) // station id, redundant with volume header
+        reader.readAscii(4) // station id
         val timeMs = reader.readU32()
         val julianDate = reader.readU16()
         val azNum = reader.readU16()
         val azAngle = reader.readF32()
         val compression = reader.readU8()
         reader.skip(1) // spare
-        reader.readU16() // radial length in bytes, informational only
-        reader.skip(1) // azimuth resolution spacing code
+        reader.readU16() // radial length
+        reader.skip(1) // azimuth resolution
         val radialStatusRaw = reader.readU8()
         val elevNum = reader.readU8()
-        reader.skip(1) // cut sector number
+        reader.skip(1) // cut sector
         val elevAngle = reader.readF32()
-        reader.skip(1) // spot blanking status
-        reader.skip(1) // azimuth indexing mode
+        reader.skip(1) // spot blanking
+        reader.skip(1) // azimuth indexing
         val numDataBlocks = reader.readU16()
 
-        if (compression != 0) return // compressed Msg31 payloads are not produced in practice
+        if (compression != 0) return
 
         val blockPointers = IntArray(numDataBlocks) { reader.readI32() }
 
@@ -178,19 +187,16 @@ object Level2Decoder {
             val blockName = reader.readAscii(3)
             when (blockName) {
                 "RAD" -> {
-                    reader.skip(2) // block size
+                    reader.skip(2)
                     val unambRangeRaw = reader.readU16()
-                    reader.skip(8) // noise_h, noise_v
+                    reader.skip(8)
                     val nyquistRaw = reader.readU16()
                     radialConsts = RadialConstants(
                         unambiguousRangeKm = unambRangeRaw * 0.1f,
                         nyquistVelocityMs = nyquistRaw * 0.01f,
                     )
                 }
-                "VOL", "ELV" -> {
-                    // Calibration/site metadata not needed to render REF/VEL/RHO.
-                }
-                else -> if (blockType == "D") {
+                else -> if (blockType == "D" && REQUIRED_MOMENTS.contains(blockName)) {
                     decodeMomentBlock(reader, blockName)?.let { moments[blockName] = it }
                 }
             }
@@ -215,7 +221,6 @@ object Level2Decoder {
         sweeps.getOrPut(elevNum) { mutableListOf() }.add(radial)
     }
 
-    /** Generic Data Moment block (ICD Table XVII): 28-byte header + packed gate data. */
     private fun decodeMomentBlock(reader: RadarByteReader, name: String): MomentData? {
         reader.skip(4) // reserved
         val numGates = reader.readU16()
@@ -223,7 +228,7 @@ object Level2Decoder {
         val gateWidthRaw = reader.readU16()
         reader.skip(2) // tover
         reader.skip(2) // snr threshold
-        reader.skip(1) // recombined-azimuths/gates flags
+        reader.skip(1) // flags
         val dataSizeBits = reader.readU8()
         val scale = reader.readF32()
         val offset = reader.readF32()
@@ -235,8 +240,7 @@ object Level2Decoder {
         for (i in 0 until numGates) {
             val raw = if (dataSizeBits == 8) reader.readU8() else reader.readU16()
             values[i] = when {
-                raw == 0 -> MomentData.BELOW_THRESHOLD
-                raw == 1 -> MomentData.RANGE_FOLDED
+                raw <= 1 -> if (raw == 1) MomentData.RANGE_FOLDED else MomentData.BELOW_THRESHOLD
                 scale == 0f -> MomentData.BELOW_THRESHOLD
                 else -> (raw - offset) / scale
             }

@@ -62,6 +62,13 @@ dependencies {
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
+
+    // Location - Downgraded to fix Kotlin metadata version conflict
+    implementation("com.google.android.gms:play-services-location:21.0.1")
+
+    // Free Maps (Osmdroid)
+    implementation("org.osmdroid:osmdroid-android:6.1.20")
 
     testImplementation("org.jetbrains.kotlin:kotlin-test")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")

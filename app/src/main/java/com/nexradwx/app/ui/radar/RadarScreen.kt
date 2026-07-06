@@ -38,8 +38,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.nexradwx.app.ui.theme.NexradWxTheme
 import com.nexradwx.core.model.MomentCode
 import com.nexradwx.core.site.RadarSite
 import com.nexradwx.core.site.RadarSiteCatalog
@@ -88,17 +91,6 @@ fun RadarScreen(viewModel: RadarViewModel = viewModel()) {
         },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            val selectedIndex = DISPLAYED_MOMENTS.indexOf(uiState.moment).coerceAtLeast(0)
-            TabRow(selectedTabIndex = selectedIndex) {
-                DISPLAYED_MOMENTS.forEach { moment ->
-                    Tab(
-                        selected = moment == uiState.moment,
-                        onClick = { viewModel.selectMoment(moment) },
-                        text = { Text(moment.displayName) },
-                    )
-                }
-            }
-
             Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 if (useMap) {
                     RadarMap(
@@ -116,9 +108,27 @@ fun RadarScreen(viewModel: RadarViewModel = viewModel()) {
                         modifier = Modifier.padding(8.dp),
                     )
                 }
-                
+
                 if (uiState.isLoading) {
                     CircularProgressIndicator()
+                }
+
+                // Hosted as its own native View (rather than a plain composable) so Android's
+                // ordinary child-draw-order guarantees it, an opaque frame, always paints over
+                // the map below it - the map is a real embedded View (osmdroid's MapView) and its
+                // own async tile/pan redraws would otherwise bleed on top of plain Compose content
+                // declared "above" it here, regardless of layout order.
+                val selectedIndex = DISPLAYED_MOMENTS.indexOf(uiState.moment).coerceAtLeast(0)
+                ComposeOverlay(modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
+                    TabRow(selectedTabIndex = selectedIndex) {
+                        DISPLAYED_MOMENTS.forEach { moment ->
+                            Tab(
+                                selected = moment == uiState.moment,
+                                onClick = { viewModel.selectMoment(moment) },
+                                text = { Text(moment.displayName) },
+                            )
+                        }
+                    }
                 }
             }
 
@@ -157,6 +167,23 @@ fun RadarScreen(viewModel: RadarViewModel = viewModel()) {
             },
         )
     }
+}
+
+/**
+ * Hosts [content] in its own [ComposeView] instead of composing it inline. A plain composable
+ * placed "above" an AndroidView (like the map's embedded osmdroid MapView) in the Compose tree can
+ * still end up drawn underneath it, because Android always draws real interop Views after all
+ * plain Compose content sharing the same Owner. Giving [content] its own real View makes it a
+ * sibling of the map's View instead, so ordinary last-added-draws-on-top ordering applies and it
+ * reliably paints over the map.
+ */
+@Composable
+private fun ComposeOverlay(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    AndroidView(
+        factory = { context -> ComposeView(context) },
+        update = { view -> view.setContent { NexradWxTheme { content() } } },
+        modifier = modifier,
+    )
 }
 
 @Composable
